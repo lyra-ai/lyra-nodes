@@ -88,10 +88,24 @@ class LyraImageAudioFusion:
 
     @staticmethod
     def _compose_filename(directory: Path, prefix: str) -> Path:
-        sanitized = prefix.strip() or "image_audio_fusion"
-        if not sanitized.lower().endswith(".mp4"):
-            sanitized += ".mp4"
-        return directory / sanitized
+        base = prefix.strip() or "image_audio_fusion"
+
+        if base.lower().endswith(".mp4"):
+            base_name = base[:-4] or "image_audio_fusion"
+        else:
+            base_name = base
+        ext = ".mp4"
+
+        candidate = directory / f"{base_name}{ext}"
+        if not candidate.exists():
+            return candidate
+
+        index = 1
+        while True:
+            candidate = directory / f"{base_name}_{index}{ext}"
+            if not candidate.exists():
+                return candidate
+            index += 1
 
     @staticmethod
     def _encode_video(
