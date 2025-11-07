@@ -1,24 +1,17 @@
-"""
-Lyra Audio Visualizer
-=====================
-
-Overlay a waveform/equalizer strip on top of a static image using FFmpeg's
-showwaves filter. Outputs a VHS_FILENAMES tuple (save flag + rendered mp4 path).
-Supports automatic palette extraction from the source image.
-"""
+from __future__ import annotations
 
 import contextlib
-import math
 import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union, Optional
+from typing import Any, Dict, Optional, Tuple, Union
 
 import colorsys
 import numpy as np
 import torch
 from PIL import Image
+
 import folder_paths
 
 try:
@@ -27,6 +20,10 @@ except ImportError:
     AudioArrayClip = None  # type: ignore
 
 AudioLike = Union[Dict[str, Any], Tuple[Any, Any], torch.Tensor, list]
+
+
+def _clamp(v: float, vmin: float = 0.0, vmax: float = 1.0) -> float:
+    return max(vmin, min(v, vmax))
 
 
 class LyraAudioVisualizer:
@@ -57,6 +54,10 @@ class LyraAudioVisualizer:
                     "step": 8,
                     "tooltip": "Height in pixels for the waveform strip.",
                 }),
+                "panel_mode": (["Gradient", "Glass", "Solid", "Disabled"], {
+                    "default": "Gradient",
+                    "tooltip": "Gradient blends with the image automatically.",
+                }),
                 "auto_colors": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Derive wave/panel colors from the image palette.",
@@ -64,19 +65,26 @@ class LyraAudioVisualizer:
                 "wave_color": ("STRING", {
                     "default": "#00ffaa",
                     "multiline": False,
-                    "tooltip": "Hex RGB color for the waveform (used if auto_colors is False).",
+                    "tooltip": "Wave color if auto_colors is False.",
                 }),
                 "panel_color": ("STRING", {
                     "default": "#000000",
                     "multiline": False,
-                    "tooltip": "Background panel color (hex, used if auto_colors is False).",
+                    "tooltip": "Panel/tint color (Solid/Gradient when auto_colors is False).",
                 }),
                 "panel_opacity": ("FLOAT", {
                     "default": 0.35,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.05,
-                    "tooltip": "Panel opacity (0 = transparent, 1 = opaque).",
+                    "tooltip": "Opacity for Solid/Gradient panel (also tint strength for glass).",
+                }),
+                "glass_blur_sigma": ("FLOAT", {
+                    "default": 18.0,
+                    "min": 1.0,
+                    "max": 60.0,
+                    "step": 1.0,
+                    "tooltip": "Blur radius when panel_mode=Glass.",
                 }),
                 "filename_prefix": ("STRING", {
                     "default": "visualizer",
@@ -90,16 +98,20 @@ class LyraAudioVisualizer:
             }
         }
 
+    # ------------------------------------------------------------------------- API
+
     def render_visualizer(
         self,
         image: torch.Tensor,
         audio_clip: AudioLike,
         fps: int = 30,
         visualizer_height: int = 160,
+        panel_mode: str = "Gradient",
         auto_colors: bool = True,
         wave_color: str = "#00ffaa",
         panel_color: str = "#000000",
         panel_opacity: float = 0.35,
+        glass_blur_sigma: float = 18.0,
         filename_prefix: str = "visualizer",
         save_output: bool = True,
     ):
@@ -122,15 +134,27 @@ class LyraAudioVisualizer:
 
         image_path = self._write_image(frame, temp_dir)
         audio_path = self._write_audio(samples, sample_rate, temp_dir)
+        gradient_path: Optional[Path] = None
 
         output_dir = self._resolve_directory(save_output)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = self._compose_filename(output_dir, filename_prefix)
 
         try:
+            if panel_mode.lower() == "gradient":
+                gradient_path = self._create_gradient_panel(
+                    temp_dir=temp_dir,
+                    width=width,
+                    bar_height=visualizer_height,
+                    panel_color_hex=panel_color,
+                    wave_color_hex=wave_color,
+                    opacity=panel_opacity,
+                )
+
             self._run_ffmpeg(
                 image_path=image_path,
                 audio_path=audio_path,
+                gradient_path=gradient_path,
                 output_path=output_path,
                 width=width,
                 height=height,
@@ -138,11 +162,15 @@ class LyraAudioVisualizer:
                 wave_color=wave_color,
                 panel_color=panel_color,
                 panel_opacity=panel_opacity,
+                panel_mode=panel_mode,
+                glass_sigma=glass_blur_sigma,
                 fps=fps,
             )
         finally:
             image_path.unlink(missing_ok=True)
             audio_path.unlink(missing_ok=True)
+            if gradient_path:
+                gradient_path.unlink(missing_ok=True)
 
         return ((bool(save_output), [str(output_path)]),)
 
@@ -226,8 +254,7 @@ class LyraAudioVisualizer:
         path = temp_dir / f"lyra_vis_image_{uuid_str}.png"
         array = (frame_chw.numpy() * 255.0).round().astype(np.uint8)
         array = np.transpose(array[:3], (1, 2, 0))  # CHW -> HWC
-        image = Image.fromarray(array)
-        image.save(path)
+        Image.fromarray(array).save(path)
         return path
 
     @staticmethod
@@ -245,7 +272,7 @@ class LyraAudioVisualizer:
 
         with contextlib.closing(wave.open(path.as_posix(), "wb")) as wav_file:
             wav_file.setnchannels(channels)
-            wav_file.setsampwidth(2)  # int16
+            wav_file.setsampwidth(2)
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(pcm.T.tobytes())
 
@@ -276,44 +303,76 @@ class LyraAudioVisualizer:
 
     def _run_ffmpeg(
         self,
+        *,
         image_path: Path,
         audio_path: Path,
+        gradient_path: Optional[Path],
         output_path: Path,
         width: int,
         height: int,
         bar_height: int,
-        wave_color: Union[str, Tuple[int, int, int]],
-        panel_color: Union[str, Tuple[int, int, int]],
+        wave_color: str,
+        panel_color: str,
         panel_opacity: float,
+        panel_mode: str,
+        glass_sigma: float,
         fps: int,
     ) -> None:
         import wave
 
         bar_height = max(32, min(bar_height, height))
         fps = max(10, fps)
-
-        wave_hex = self._color_to_hex(wave_color)
-        panel_hex = self._color_to_hex(panel_color)
-
-        alpha = max(0.0, min(panel_opacity, 1.0))
+        panel_mode = (panel_mode or "Gradient").strip().lower()
         panel_y = height - bar_height
         duration = self._audio_duration(audio_path)
 
-        filter_complex = (
-            f"[0:v]scale={width}:{height}[bg];"
-            f"color=color={panel_hex}@{alpha:.3f}:size={width}x{bar_height}[panel];"
-            f"[1:a]atrim=duration={duration}"
-            f",showwaves=mode=cline:s={width}x{bar_height}:rate={fps}:colors={wave_hex}[vis];"
-            f"[bg][panel]overlay=0:{panel_y}[bgp];"
-            f"[bgp][vis]overlay=0:{panel_y}"
-        )
+        wave_hex = self._color_to_hex(wave_color)
+        panel_hex = self._color_to_hex(panel_color)
+        alpha = _clamp(panel_opacity)
+        sigma = max(1.0, min(glass_sigma, 100.0))
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loop", "1",
-            "-i", str(image_path),
-            "-i", str(audio_path),
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(image_path), "-i", str(audio_path)]
+
+        if panel_mode == "gradient" and gradient_path:
+            cmd += ["-loop", "1", "-i", str(gradient_path)]
+
+        if panel_mode == "disabled":
+            filter_complex = (
+                f"[0:v]scale={width}:{height}[bg];"
+                f"[1:a]atrim=duration={duration}"
+                f",showwaves=mode=cline:s={width}x{bar_height}:rate={fps}:colors={wave_hex}[vis];"
+                f"[bg][vis]overlay=0:{panel_y}"
+            )
+        elif panel_mode == "solid":
+            filter_complex = (
+                f"[0:v]scale={width}:{height}[bg];"
+                f"color=color={panel_hex}@{alpha:.3f}:size={width}x{bar_height}[panel];"
+                f"[1:a]atrim=duration={duration}"
+                f",showwaves=mode=cline:s={width}x{bar_height}:rate={fps}:colors={wave_hex}[vis];"
+                f"[bg][panel]overlay=0:{panel_y}[bgp];"
+                f"[bgp][vis]overlay=0:{panel_y}"
+            )
+        elif panel_mode == "glass":
+            filter_complex = (
+                f"[0:v]scale={width}:{height},split[vbase][vglass];"
+                f"[vglass]crop=iw:{bar_height}:0:{panel_y},gblur=sigma={sigma},format=rgba,"
+                f"colorchannelmixer=aa={alpha:.3f}[glass];"
+                f"[vbase][glass]overlay=0:{panel_y}[bgp];"
+                f"[1:a]atrim=duration={duration}"
+                f",showwaves=mode=cline:s={width}x{bar_height}:rate={fps}:colors={wave_hex}[vis];"
+                f"[bgp][vis]overlay=0:{panel_y}"
+            )
+        else:  # gradient
+            filter_complex = (
+                f"[0:v]scale={width}:{height}[bg];"
+                f"[2:v]scale={width}:{bar_height},format=rgba[grad];"
+                f"[bg][grad]overlay=0:{panel_y}[bgp];"
+                f"[1:a]atrim=duration={duration}"
+                f",showwaves=mode=cline:s={width}x{bar_height}:rate={fps}:colors={wave_hex}[vis];"
+                f"[bgp][vis]overlay=0:{panel_y}"
+            )
+
+        cmd += [
             "-filter_complex", filter_complex,
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
@@ -323,11 +382,13 @@ class LyraAudioVisualizer:
             str(output_path),
         ]
 
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode != 0:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
             raise RuntimeError(
-                f"FFmpeg failed:\nSTDOUT:\n{process.stdout}\nSTDERR:\n{process.stderr}"
+                f"FFmpeg failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             )
+
+    # ----------------------------------------------------------------- palette —
 
     @staticmethod
     def _color_to_hex(color: Union[str, Tuple[int, int, int]]) -> str:
@@ -343,6 +404,18 @@ class LyraAudioVisualizer:
         if len(color) != 6:
             return "00ffaa"
         return color
+
+    @staticmethod
+    def _hex_to_rgb(color: str) -> Tuple[int, int, int]:
+        color = color.strip().lower()
+        if color.startswith("#"):
+            color = color[1:]
+        color = "".join(ch for ch in color if ch in "0123456789abcdef")
+        if len(color) == 3:
+            color = "".join(ch * 2 for ch in color)
+        if len(color) != 6:
+            return (0, 0, 0)
+        return tuple(int(color[i:i + 2], 16) for i in range(0, 6, 2))
 
     @staticmethod
     def _audio_duration(path: Path) -> float:
@@ -379,15 +452,17 @@ class LyraAudioVisualizer:
         if not rgb_counts:
             return None, None
 
-        brightness = lambda rgb: 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+        def brightness(rgb_tuple: Tuple[int, int, int]) -> float:
+            r, g, b = rgb_tuple
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
         sorted_by_count = sorted(rgb_counts, key=lambda x: x[0], reverse=True)
 
         brightest = max(sorted_by_count, key=lambda item: brightness(item[1]))[1]
         darkest = min(sorted_by_count, key=lambda item: brightness(item[1]))[1]
 
-        wave_rgb = LyraAudioVisualizer._boost_saturation(brightest, factor=1.15)
-        panel_rgb = LyraAudioVisualizer._darken_color(darkest, factor=0.55)
+        wave_rgb = LyraAudioVisualizer._boost_saturation(brightest, factor=1.18)
+        panel_rgb = LyraAudioVisualizer._darken_color(darkest, factor=0.58)
 
         return (
             f"#{wave_rgb[0]:02x}{wave_rgb[1]:02x}{wave_rgb[2]:02x}",
@@ -398,11 +473,63 @@ class LyraAudioVisualizer:
     def _boost_saturation(rgb: Tuple[int, int, int], factor: float = 1.2) -> Tuple[int, int, int]:
         r, g, b = [c / 255.0 for c in rgb]
         h, s, v = colorsys.rgb_to_hsv(r, g, b)
-        s = max(0.0, min(s * factor, 1.0))
-        v = max(0.0, min(v * 1.05, 1.0))
+        s = _clamp(s * factor)
+        v = _clamp(v * 1.05)
         r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
         return int(r2 * 255), int(g2 * 255), int(b2 * 255)
 
     @staticmethod
     def _darken_color(rgb: Tuple[int, int, int], factor: float = 0.5) -> Tuple[int, int, int]:
         return tuple(max(0, min(int(c * factor), 255)) for c in rgb)
+
+    # ------------------------------------------------------------- gradient pane —
+
+    def _create_gradient_panel(
+        self,
+        *,
+        temp_dir: Path,
+        width: int,
+        bar_height: int,
+        panel_color_hex: str,
+        wave_color_hex: str,
+        opacity: float,
+    ) -> Path:
+        bow = max(16, bar_height)
+        panel_rgb = self._hex_to_rgb(panel_color_hex)
+        wave_rgb = self._hex_to_rgb(wave_color_hex)
+
+        top_rgb = self._blend_rgb(panel_rgb, wave_rgb, 0.25)
+        bottom_rgb = self._blend_rgb(panel_rgb, wave_rgb, 0.05)
+        top_alpha = _clamp(opacity * 0.55)
+        bottom_alpha = _clamp(opacity)
+
+        gradient = np.zeros((bow, width, 4), dtype=np.uint8)
+
+        for y in range(bow):
+            t = y / max(1, bow - 1)
+            rgb = self._lerp_tuple(top_rgb, bottom_rgb, t)
+            alpha = self._lerp(top_alpha, bottom_alpha, t)
+            gradient[y, :, :3] = rgb
+            gradient[y, :, 3] = int(alpha * 255)
+
+        gradient_img = Image.fromarray(gradient, mode="RGBA")
+
+        uuid_str = uuid.uuid4().hex[:8]
+        path = temp_dir / f"lyra_vis_gradient_{uuid_str}.png"
+        gradient_img.save(path)
+        return path
+
+    @staticmethod
+    def _lerp_tuple(a: Tuple[int, int, int], b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+        return tuple(int((1 - t) * a[i] + t * b[i]) for i in range(3))
+
+    @staticmethod
+    def _lerp(a: float, b: float, t: float) -> float:
+        return (1 - t) * a + t * b
+
+    @staticmethod
+    def _blend_rgb(base: Tuple[int, int, int], accent: Tuple[int, int, int], mix: float) -> Tuple[int, int, int]:
+        return tuple(
+            int((1 - mix) * base[i] + mix * accent[i])
+            for i in range(3)
+        )
