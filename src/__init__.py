@@ -19,7 +19,7 @@ NODE_CLASS_MAPPINGS = {
     "LyraWebRequester": LyraWebRequester,
     "LyraCollectOpenAIResponse": LyraCollectOpenAIResponse,
     "LyraCustomOpenAIRequest": LyraCustomOpenAIRequest,
-    "LyraStringToTypes": LyraStringToTypes,
+    "LyraStringToTypes": LyraStringToTypes
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -32,5 +32,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LyraWebRequester": "Lyra – 🔗 Web Requester",
     "LyraCollectOpenAIResponse": "Lyra – 🤖 Collect OpenAI Content",
     "LyraCustomOpenAIRequest": "Lyra – 🧠 Custom OpenAI Request",
-    "LyraStringToTypes": "Lyra – 🔄 String to Types",
+    "LyraStringToTypes": "Lyra – 🔄 String to Types"
 }
