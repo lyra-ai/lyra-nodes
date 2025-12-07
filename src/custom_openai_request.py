@@ -1,21 +1,9 @@
-"""
-Lyra Custom OpenAI Request
-==========================
-
-Executes the request.
-- Robust against blank/None inputs.
-- Supports the System/Intro/History/Prefill sandwich.
-- Auto-retry logic.
-- Auto-strips MyShell artifact braces "{ [...] }".
-- **New**: Treats "EMPTY_INPUT" as a blank string.
-"""
-
 import json
 import ast
-import asyncio
+import time
 from typing import Dict, Tuple, Optional
 
-import httpx
+import requests
 
 class LyraCustomOpenAIRequest:
     CATEGORY = "Lyra/Utility"
@@ -28,7 +16,7 @@ class LyraCustomOpenAIRequest:
         return {
             "required": {
                 "url": ("STRING", {
-                    "default": "https://api.openai.com/v1/chat/completions",
+                    "default": "",
                     "multiline": False,
                 }),
                 "api_key": ("STRING", {
@@ -36,7 +24,7 @@ class LyraCustomOpenAIRequest:
                     "multiline": False,
                     "password": True,
                 }),
-                "model": ("STRING", {"default": "gpt-3.5-turbo", "multiline": False}),
+                "model": ("STRING", {"default": "", "multiline": False}),
                 "messages": ("STRING", {
                     "default": '[]',
                     "multiline": True,
@@ -53,7 +41,7 @@ class LyraCustomOpenAIRequest:
             }
         }
 
-    async def execute_openai_request(
+    def execute_openai_request(
         self,
         url: str,
         api_key: str,
@@ -73,7 +61,6 @@ class LyraCustomOpenAIRequest:
             if val is None:
                 return ""
             s = str(val)
-            # Check for the magic placeholder
             if s.strip() == "EMPTY_INPUT":
                 return ""
             return s
@@ -87,8 +74,7 @@ class LyraCustomOpenAIRequest:
         # 1. Parsing Messages
         messages_list = []
 
-        # MyShell Fix: Strip outer braces if they wrap a list
-        # Detects "{ [ ... ] }" pattern
+        # MyShell Fix: Strip outer braces
         if raw_msgs.startswith("{") and raw_msgs.endswith("}"):
             inner = raw_msgs[1:-1].strip()
             if inner.startswith("[") and inner.endswith("]"):
@@ -117,7 +103,7 @@ class LyraCustomOpenAIRequest:
 
         # B. Intro
         if intro_msg.strip():
-            final_messages.append({"role": "user", "content": "[Start a new Chat]"})
+            final_messages.append({"role": "user", "content": "."})
             final_messages.append({"role": "assistant", "content": intro_msg})
 
         # C. History
@@ -144,14 +130,15 @@ class LyraCustomOpenAIRequest:
             "stream": False
         }
 
-        # 4. Request
+        # 4. Request (Sync Loop)
         response_text = ""
         status_code = 0
 
-        async with httpx.AsyncClient() as client:
+        # Use a session for better connection pooling logic (even in sync mode)
+        with requests.Session() as session:
             for attempt in range(retry_attempts + 1):
                 try:
-                    response = await client.post(
+                    response = session.post(
                         url,
                         headers=headers,
                         json=payload,
@@ -167,8 +154,9 @@ class LyraCustomOpenAIRequest:
                     response_text = f"Error: {e}"
                     status_code = 500
 
+                # Retry logic
                 if attempt < retry_attempts:
-                    await asyncio.sleep(1)
+                    time.sleep(1) # Blocking sleep
 
         responses_json_str = json.dumps([response_text], indent=2)
         status_code_str = str(status_code)

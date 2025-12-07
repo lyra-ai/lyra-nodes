@@ -1,15 +1,6 @@
-"""
-Lyra Web Requester (Single)
-===========================
-
-A simple node for making a generic HTTP request.
-Includes a dummy 'seed' input to force ComfyUI to re-execute the node.
-"""
-
 import json
+import requests
 from typing import Dict, Tuple
-
-import httpx
 
 class LyraWebRequester:
     CATEGORY = "Lyra/Utility"
@@ -22,12 +13,12 @@ class LyraWebRequester:
         return {
             "required": {
                 "url": ("STRING", {
-                    "default": "",
+                    "default": "https://api.example.com",
                     "multiline": False,
                 }),
                 "method": (["POST", "GET", "PUT", "DELETE", "PATCH"],),
                 "headers": ("STRING", {
-                    "default": "",
+                    "default": '{\n  "Authorization": "Bearer ...",\n  "Content-Type": "application/json"\n}',
                     "multiline": True,
                     "tooltip": "Headers as a valid JSON object.",
                 }),
@@ -49,14 +40,14 @@ class LyraWebRequester:
             },
         }
 
-    async def execute_request(
+    def execute_request(
         self,
         url: str,
         method: str,
         headers: str,
         json_body: str,
         timeout: float,
-        seed: int,  # Present but ignored
+        seed: int,
     ) -> Tuple[str, str, int]:
         # Parse headers
         try:
@@ -70,24 +61,23 @@ class LyraWebRequester:
         except json.JSONDecodeError:
             return '["Invalid JSON in body."]', "400", 0
 
-        # Execute single request
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.request(
-                    method,
-                    url,
-                    headers=headers_dict,
-                    json=json_payload if method in ["POST", "PUT", "PATCH"] else None,
-                    timeout=timeout,
-                )
-                response_text = response.text
-                status_code = response.status_code
-            except httpx.RequestError as e:
-                response_text = f"Request failed: {type(e).__name__} - {e}"
-                status_code = 500
-            except Exception as e:
-                response_text = f"Unexpected error: {e}"
-                status_code = 500
+        # Execute single request (Blocking)
+        try:
+            response = requests.request(
+                method,
+                url,
+                headers=headers_dict,
+                json=json_payload if method in ["POST", "PUT", "PATCH"] else None,
+                timeout=timeout,
+            )
+            response_text = response.text
+            status_code = response.status_code
+        except requests.exceptions.RequestException as e:
+            response_text = f"Request failed: {type(e).__name__} - {e}"
+            status_code = 500
+        except Exception as e:
+            response_text = f"Unexpected error: {e}"
+            status_code = 500
 
         # Format outputs
         responses_json_str = json.dumps([response_text], indent=2)
