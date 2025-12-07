@@ -7,8 +7,7 @@ from .cdn_uploader import LyraCdnUploader
 from .web_requester import LyraWebRequester
 from .openai_collector import LyraCollectOpenAIResponse
 from .custom_openai_request import LyraCustomOpenAIRequest
-from .string_converters import LyraStringToTypes, LyraObjectToJsonString
-from .chat_builder import LyraChatBuilder
+from .string_converters import LyraStringToTypes
 from .connectivity_test import LyraConnectivityTest # ← New
 
 NODE_CLASS_MAPPINGS = {
@@ -22,9 +21,7 @@ NODE_CLASS_MAPPINGS = {
     "LyraCollectOpenAIResponse": LyraCollectOpenAIResponse,
     "LyraCustomOpenAIRequest": LyraCustomOpenAIRequest,
     "LyraStringToTypes": LyraStringToTypes,
-    "LyraObjectToJsonString": LyraObjectToJsonString,
-    "LyraChatBuilder": LyraChatBuilder,
-    "LyraConnectivityTest": LyraConnectivityTest, # ← New
+    "LyraConnectivityTest": LyraConnectivityTest
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -38,7 +35,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LyraCollectOpenAIResponse": "Lyra – 🤖 Collect OpenAI Content",
     "LyraCustomOpenAIRequest": "Lyra – 🧠 Custom OpenAI Request",
     "LyraStringToTypes": "Lyra – 🔄 String to Types",
-    "LyraObjectToJsonString": "Lyra – 📦 Object to JSON String",
-    "LyraChatBuilder": "Lyra – 💬 Chat JSON Builder",
-    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)", # ← New
+    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)"
 }
