@@ -24,7 +24,7 @@ NODE_CLASS_MAPPINGS = {
     "LyraStringToTypes": LyraStringToTypes,
     "LyraObjectToJsonString": LyraObjectToJsonString,
     "LyraChatBuilder": LyraChatBuilder,
-    "LyraConnectivityTest": LyraConnectivityTest
+    "LyraConnectivityTest": LyraConnectivityTest, # ← New
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -40,4 +40,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LyraStringToTypes": "Lyra – 🔄 String to Types",
     "LyraObjectToJsonString": "Lyra – 📦 Object to JSON String",
     "LyraChatBuilder": "Lyra – 💬 Chat JSON Builder",
-    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)"
+    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)", # ← New
+}
