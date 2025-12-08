@@ -1,9 +1,21 @@
+"""
+Lyra Custom OpenAI Request
+==========================
+
+A robust, synchronous OpenAI-compatible API request node.
+Designed for maximum compatibility across Python versions and environments.
+"""
+
 import json
 import ast
 import time
-from typing import Dict, Tuple, Optional
+import traceback
+from typing import Dict, Tuple, Optional, Any, List
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 class LyraCustomOpenAIRequest:
     CATEGORY = "Lyra/Utility"
@@ -22,11 +34,10 @@ class LyraCustomOpenAIRequest:
                 "api_key": ("STRING", {
                     "default": "",
                     "multiline": False,
-                    "password": True,
                 }),
                 "model": ("STRING", {"default": "", "multiline": False}),
                 "messages": ("STRING", {
-                    "default": '[]',
+                    "default": "[]",
                     "multiline": True,
                 }),
                 "max_tokens": ("INT", {"default": 1000, "min": 1, "max": 128000}),
@@ -41,125 +52,111 @@ class LyraCustomOpenAIRequest:
             }
         }
 
-    def execute_openai_request(
-        self,
-        url: str,
-        api_key: str,
-        model: str,
-        messages: str,
-        max_tokens: int,
-        timeout: float,
-        seed: int,
-        retry_attempts: int,
-        system_message: Optional[str] = "",
-        intro_message: Optional[str] = "",
-        prefill_message: Optional[str] = "",
-    ) -> Tuple[str, str, int]:
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        """Force re-execution when seed changes."""
+        return kwargs.get("seed", 0)
 
-        # --- Helper: Sanitize Input ---
-        def sanitize(val):
-            if val is None:
-                return ""
+    @staticmethod
+    def _safe_str(val: Any) -> str:
+        """Safely convert any value to string."""
+        if val is None:
+            return ""
+        try:
+            return str(val)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _sanitize_input(val: Any) -> str:
+        """Sanitize input value, handling None and EMPTY_INPUT sentinel."""
+        if val is None:
+            return ""
+        try:
             s = str(val)
-            if s.strip() == "EMPTY_INPUT":
-                return ""
-            return s
+        except Exception:
+            return ""
+        
+        stripped = s.strip()
+        if stripped == "EMPTY_INPUT" or stripped == "":
+            return ""
+        return s
 
-        # Apply sanitization
-        system_msg = sanitize(system_message)
-        intro_msg = sanitize(intro_message)
-        prefill_msg = sanitize(prefill_message)
-        raw_msgs = sanitize(messages)
+    @staticmethod
+    def _safe_json_dumps(obj: Any, fallback: str = "[]") -> str:
+        """Safely serialize object to JSON string."""
+        try:
+            return json.dumps(obj, indent=2, ensure_ascii=False)
+        except (TypeError, ValueError, OverflowError):
+            try:
+                return json.dumps(obj, indent=2, ensure_ascii=True)
+            except Exception:
+                return fallback
 
-        # 1. Parsing Messages
-        messages_list = []
+    def _parse_messages(self, raw_msgs: str) -> List[Dict[str, str]]:
+        """
+        Parse messages string into a list of message dicts.
+        Handles various input formats robustly.
+        """
+        if not raw_msgs or not raw_msgs.strip():
+            return []
 
-        # MyShell Fix: Strip outer braces
+        raw_msgs = raw_msgs.strip()
+
+        # MyShell Fix: Strip outer braces if wrapping a JSON array
         if raw_msgs.startswith("{") and raw_msgs.endswith("}"):
             inner = raw_msgs[1:-1].strip()
             if inner.startswith("[") and inner.endswith("]"):
                 raw_msgs = inner
 
-        if raw_msgs:
-            try:
-                messages_list = json.loads(raw_msgs)
-            except json.JSONDecodeError:
-                try:
-                    messages_list = ast.literal_eval(raw_msgs)
-                except (ValueError, SyntaxError):
-                    messages_list = []
+        # Try JSON parsing first
+        try:
+            parsed = json.loads(raw_msgs)
+            return self._normalize_messages(parsed)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
 
-        if isinstance(messages_list, dict):
-            messages_list = [messages_list]
-        if not isinstance(messages_list, list):
-            messages_list = []
+        # Try ast.literal_eval as fallback (for Python dict syntax)
+        try:
+            parsed = ast.literal_eval(raw_msgs)
+            return self._normalize_messages(parsed)
+        except (ValueError, SyntaxError, TypeError, RecursionError):
+            pass
 
-        # 2. Construct Stack
-        final_messages = []
+        # Last resort: try to extract JSON-like content
+        try:
+            # Find first [ and last ]
+            start_idx = raw_msgs.find("[")
+            end_idx = raw_msgs.rfind("]")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_substr = raw_msgs[start_idx:end_idx + 1]
+                parsed = json.loads(json_substr)
+                return self._normalize_messages(parsed)
+        except Exception:
+            pass
 
-        # A. System
-        if system_msg.strip():
-            final_messages.append({"role": "system", "content": system_msg})
+        print("[Lyra OpenAI] Warning: Could not parse messages, returning empty list")
+        return []
 
-        # B. Intro
-        if intro_msg.strip():
-            final_messages.append({"role": "user", "content": "."})
-            final_messages.append({"role": "assistant", "content": intro_msg})
+    def _normalize_messages(self, parsed: Any) -> List[Dict[str, str]]:
+        """Normalize parsed messages into a proper list of dicts."""
+        if parsed is None:
+            return []
 
-        # C. History
-        final_messages.extend(messages_list)
+        # Single dict -> wrap in list
+        if isinstance(parsed, dict):
+            parsed = [parsed]
 
-        # D. Prefill
-        if prefill_msg.strip():
-            if final_messages:
-                last_msg = final_messages[-1]
-                last_role = last_msg.get("role", "")
-                if last_role != "user":
-                    final_messages.append({"role": "user", "content": "."})
-            final_messages.append({"role": "assistant", "content": prefill_msg})
+        # Must be a list at this point
+        if not isinstance(parsed, list):
+            return []
 
-        # 3. Payload
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        payload = {
-            "model": model,
-            "messages": final_messages,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-
-        # 4. Request (Sync Loop)
-        response_text = ""
-        status_code = 0
-
-        # Use a session for better connection pooling logic (even in sync mode)
-        with requests.Session() as session:
-            for attempt in range(retry_attempts + 1):
-                try:
-                    response = session.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        timeout=timeout,
-                    )
-                    response_text = response.text
-                    status_code = response.status_code
-
-                    if status_code == 200 and response_text.strip():
-                        break
-
-                except Exception as e:
-                    response_text = f"Error: {e}"
-                    status_code = 500
-
-                # Retry logic
-                if attempt < retry_attempts:
-                    time.sleep(1) # Blocking sleep
-
-        responses_json_str = json.dumps([response_text], indent=2)
-        status_code_str = str(status_code)
-        success_count = 1 if 200 <= status_code < 300 else 0
-
-        return (responses_json_str, status_code_str, success_count)
+        # Filter and validate each message
+        result = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            
+            # Ensure role and content exist
+            role = item.get("role", "")
+            content = item.get("content", "")
