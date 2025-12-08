@@ -8,7 +8,8 @@ from .web_requester import LyraWebRequester
 from .openai_collector import LyraCollectOpenAIResponse
 from .custom_openai_request import LyraCustomOpenAIRequest
 from .string_converters import LyraStringToTypes
-from .connectivity_test import LyraConnectivityTest # ← New
+from .connectivity_test import LyraConnectivityTest
+from .character_search import LyraCharacterSearch
 
 NODE_CLASS_MAPPINGS = {
     "LyraImageAudioFusion": LyraImageAudioFusion,
@@ -21,7 +22,8 @@ NODE_CLASS_MAPPINGS = {
     "LyraCollectOpenAIResponse": LyraCollectOpenAIResponse,
     "LyraCustomOpenAIRequest": LyraCustomOpenAIRequest,
     "LyraStringToTypes": LyraStringToTypes,
-    "LyraConnectivityTest": LyraConnectivityTest
+    "LyraConnectivityTest": LyraConnectivityTest,
+    "LyraCharacterSearch": LyraCharacterSearch
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -35,5 +37,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LyraCollectOpenAIResponse": "Lyra – 🤖 Collect OpenAI Content",
     "LyraCustomOpenAIRequest": "Lyra – 🧠 Custom OpenAI Request",
     "LyraStringToTypes": "Lyra – 🔄 String to Types",
-    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)"
+    "LyraConnectivityTest": "Lyra – 📶 Connectivity Test (Requests)",
+    "LyraCharacterSearch": "Lyra – 🔍 Character Search"
 }

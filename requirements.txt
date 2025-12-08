@@ -4,4 +4,6 @@ numpy>=1.24
 requests>=2.31
 pydub>=0.25
 Pillow
-httpx
+pandas>=1.5.0
+numpy>=1.21.0
+rapidfuzz>=3.0.0
