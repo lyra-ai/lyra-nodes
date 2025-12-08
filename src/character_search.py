@@ -143,10 +143,20 @@ class LyraCharacterSearch:
         return cls._df
 
     @staticmethod
-    def _normalize_text(text: str) -> str:
+    def _normalize_text(text) -> str:
         """Normalize text by removing special characters and extra whitespace."""
+        if pd.isna(text) or text is None:
+            return ""
+        text = str(text)
         text = text.replace("_", " ").replace("(", "").replace(")", "").replace(":", "")
         return " ".join(text.strip().lower().split())
+
+    @staticmethod
+    def _safe_string(value) -> str:
+        """Safely convert a value to string, handling NaN/None."""
+        if pd.isna(value) or value is None:
+            return ""
+        return str(value)
 
     def _generate_permutations(self, words: list) -> list:
         """Generate word order permutations for multi-word queries."""
@@ -189,6 +199,24 @@ class LyraCharacterSearch:
 
         return False
 
+    def _prepare_search_arrays(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, list]:
+        """
+        Prepare normalized arrays for searching.
+        Returns (characters, triggers, combined_texts) as properly typed arrays.
+        """
+        # Convert to list and normalize, handling NaN values
+        characters = [self._normalize_text(c) for c in df['character'].tolist()]
+        triggers = [self._safe_string(t).lower() for t in df['trigger'].tolist()]
+
+        # Create combined texts as a list (avoids numpy dtype issues)
+        combined_texts = [f"{char} {trig}" for char, trig in zip(characters, triggers)]
+
+        return (
+            np.array(characters, dtype=str),
+            np.array(triggers, dtype=str),
+            combined_texts
+        )
+
     def search_character(
         self,
         query: str,
@@ -228,18 +256,16 @@ class LyraCharacterSearch:
         print(f"[Lyra CharacterSearch] Normalized query: '{filtered_query}'")
         print(f"[Lyra CharacterSearch] Generated {len(query_permutations)} permutations")
 
-        # Prepare character data
-        characters = df['character'].apply(self._normalize_text).to_numpy()
-        triggers = df['trigger'].str.lower().to_numpy()
-        combined_texts = np.char.add(np.char.add(characters, " "), triggers)
+        # Prepare character data with proper type handling
+        characters, triggers, combined_texts = self._prepare_search_arrays(df)
 
         # Try exact match first
         for perm in query_permutations:
             exact_matches = np.where(characters == perm)[0]
             if len(exact_matches) > 0:
                 best_match = df.iloc[exact_matches[0]]
-                trigger = str(best_match['trigger']) if pd.notna(best_match['trigger']) else ""
-                core_tags = str(best_match['core_tags']) if pd.notna(best_match['core_tags']) else ""
+                trigger = self._safe_string(best_match['trigger'])
+                core_tags = self._safe_string(best_match['core_tags'])
                 print(f"[Lyra CharacterSearch] Exact match found: '{best_match['character']}'")
                 return (trigger, core_tags)
 
@@ -249,14 +275,14 @@ class LyraCharacterSearch:
         best_perm = ""
 
         for perm in query_permutations:
-            scores = np.array([
+            scores = [
                 max(
                     fuzz.token_sort_ratio(perm, text),
                     fuzz.partial_ratio(perm, text)
                 ) for text in combined_texts
-            ])
+            ]
 
-            perm_best_idx = np.argmax(scores)
+            perm_best_idx = max(range(len(scores)), key=lambda i: scores[i])
             perm_best_score = scores[perm_best_idx]
 
             if perm_best_score > best_score:
@@ -272,8 +298,8 @@ class LyraCharacterSearch:
             return ("", "")
 
         best_match = df.iloc[best_idx]
-        result_trigger = str(best_match['trigger']).lower() if pd.notna(best_match['trigger']) else ""
-        result_character = str(best_match['character']).lower() if pd.notna(best_match['character']) else ""
+        result_trigger = self._safe_string(best_match['trigger']).lower()
+        result_character = self._safe_string(best_match['character']).lower()
 
         # Strict check: keyword overlap validation
         combined_result = f"{result_character} {result_trigger}"
@@ -300,8 +326,8 @@ class LyraCharacterSearch:
                 return ("", "")
 
         # Success - return results
-        trigger = str(best_match['trigger']) if pd.notna(best_match['trigger']) else ""
-        core_tags = str(best_match['core_tags']) if pd.notna(best_match['core_tags']) else ""
+        trigger = self._safe_string(best_match['trigger'])
+        core_tags = self._safe_string(best_match['core_tags'])
 
         print(f"[Lyra CharacterSearch] Match found: '{best_match['character']}' (score: {best_score})")
 
