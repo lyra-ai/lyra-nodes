@@ -1,11 +1,3 @@
-"""
-Lyra Custom OpenAI Request
-==========================
-
-A robust, synchronous OpenAI-compatible API request node.
-Designed for maximum compatibility across Python versions and environments.
-"""
-
 import json
 import ast
 import time
